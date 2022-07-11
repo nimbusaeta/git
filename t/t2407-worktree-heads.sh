@@ -7,8 +7,11 @@ TEST_PASSES_SANITIZE_LEAK=true
 
 test_expect_success 'setup' '
 	test_commit init &&
-	git branch -f fake-1 &&
-	git branch -f fake-2 &&
+
+	for i in 1 2 3 4
+	do
+		git branch -f fake-$i || return 1
+	done &&
 
 	for i in 1 2 3 4
 	do
@@ -54,7 +57,18 @@ test_expect_success 'refuse to overwrite: worktree in bisect' '
 	grep "cannot force update the branch '\''fake-2'\'' checked out at.*wt-4" err
 '
 
-test_expect_success 'refuse to overwrite: worktree in rebase' '
+test_expect_success 'refuse to overwrite: worktree in rebase (apply)' '
+	test_when_finished rm -rf .git/worktrees/wt-*/rebase-apply &&
+
+	mkdir -p .git/worktrees/wt-3/rebase-apply &&
+	echo refs/heads/fake-1 >.git/worktrees/wt-3/rebase-apply/head-name &&
+	echo refs/heads/fake-2 >.git/worktrees/wt-3/rebase-apply/onto &&
+
+	test_must_fail git branch -f fake-1 HEAD 2>err &&
+	grep "cannot force update the branch '\''fake-1'\'' checked out at.*wt-3" err
+'
+
+test_expect_success 'refuse to overwrite: worktree in rebase (merge)' '
 	test_when_finished rm -rf .git/worktrees/wt-*/rebase-merge &&
 
 	mkdir -p .git/worktrees/wt-3/rebase-merge &&
@@ -62,8 +76,19 @@ test_expect_success 'refuse to overwrite: worktree in rebase' '
 	echo refs/heads/fake-1 >.git/worktrees/wt-3/rebase-merge/head-name &&
 	echo refs/heads/fake-2 >.git/worktrees/wt-3/rebase-merge/onto &&
 
-	test_must_fail git branch -f fake-1 HEAD 2>err &&
-	grep "cannot force update the branch '\''fake-1'\'' checked out at.*wt-3" err
+	cat >.git/worktrees/wt-3/rebase-merge/update-refs <<-EOF &&
+	refs/heads/fake-3
+	$(git rev-parse HEAD~1)
+	refs/heads/fake-4
+	$(git rev-parse HEAD)
+	EOF
+
+	for i in 1 3 4
+	do
+		test_must_fail git branch -f fake-$i HEAD 2>err &&
+		grep "cannot force update the branch '\''fake-$i'\'' checked out at.*wt-3" err ||
+			return 1
+	done
 '
 
 test_expect_success !SANITIZE_LEAK 'refuse to fetch over ref: checked out' '
@@ -124,6 +149,23 @@ test_expect_success 'refuse to overwrite when in error states' '
 		grep "cannot force update the branch '\''fake-$i'\'' checked out at" err ||
 			return 1
 	done
+'
+
+. "$TEST_DIRECTORY"/lib-rebase.sh
+
+test_expect_success !SANITIZE_LEAK 'refuse to overwrite during rebase with --update-refs' '
+	git commit --fixup HEAD~2 --allow-empty &&
+	(
+		set_cat_todo_editor &&
+		test_must_fail git rebase -i --update-refs HEAD~3 >todo &&
+		! grep "update-refs" todo
+	) &&
+	git branch -f allow-update HEAD~2 &&
+	(
+		set_cat_todo_editor &&
+		test_must_fail git rebase -i --update-refs HEAD~3 >todo &&
+		grep "update-ref refs/heads/allow-update" todo
+	)
 '
 
 test_done
